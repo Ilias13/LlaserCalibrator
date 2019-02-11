@@ -1,0 +1,358 @@
+// Cory Sonustun  &   Brandon Moskowitz  CISC 4900  Nov. 30, 2017
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <ctype.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#include "inc/hw_memmap.h"
+#include "inc/hw_types.h"
+#include "inc/hw_ints.h"
+#include "driverlib/gpio.h"
+#include "driverlib/pin_map.h"
+#include "driverlib/pwm.h"
+#include "driverlib/sysctl.h"
+#include "driverlib/uart.h"
+#include "driverlib/interrupt.h"
+#include "driverlib/timer.h"
+#include "utils/uartstdio.h"
+
+void initializeClock();                                                             // This function initializes the clock.
+void initializeInterrupt();                                                         // This function initializes the interrupt.
+void initializeGPIO();                                                              // This function initializes the GPIO.
+void initializeUART();                                                              // This function initializes the UART.
+void initializeTimer();                                                             // This function initializes the Timer.
+
+void PinGenConfig();                                                                // This function configures the pins and the generators.
+
+void command_Freq();                                                                // This function controls the Freq Command.
+void command_Duty();                                                                // This function controls the Duty Cycle.
+void OutputFun(char*, char*);                                                       // This function handles all oputput for this program.
+bool CheckChoice(char [], char);                                                  // This function checks for valid inputted choice.
+char InputFun();
+
+/* Structure for the PWM Generators.
+   This contains its frequency and duty cycle values.
+*/
+typedef struct {
+    volatile uint32_t frequency;
+    volatile uint8_t dutyCycle;
+} ConfigPWM;
+
+ConfigPWM pwm0;                                                                 // This configures the PWM generator 0, using PD0.
+ConfigPWM pwm1;                                                                 // This configures the PWM generator 1, using PD1.
+ConfigPWM pwm2;                                                                 // This configures the PWM generator 2, using PB4.
+
+
+// This function initializes the PWM generators with these values.
+void initializeConfigPWM(ConfigPWM* gen){
+        gen->dutyCycle = 0;
+        gen->frequency = 700;
+}
+
+
+int main(void) {
+
+    // Initialize the structures.
+    initializeConfigPWM(&pwm0);
+    initializeConfigPWM(&pwm1);
+    initializeConfigPWM(&pwm2);
+
+
+    // Initialize the Hardware.
+    initializeClock();
+    initializeInterrupt();
+    initializeGPIO();
+    initializeUART();
+    initializeTimer();
+
+    char arr[3] = {'f','d','e'};
+    char choice;
+    bool wait = false;
+
+      while(1) {
+                    // This prints a menu of choices to the screen.
+                    OutputFun("aaa001", "Enter choice:");
+                    OutputFun("aaa002", "F - Changes PWM Frequency");
+                    OutputFun("aaa003", "D - Changes PWM Duty Cycle");
+                    OutputFun("aaa022", "E - Exit");
+
+
+
+                     wait = true;
+
+                    while(wait) {
+                          // You wait and check the input.
+                    	bool check = true;
+                    	          while(check){
+                    	             choice = InputFun();
+                    	             check = CheckChoice(arr,choice);
+                    	         	OutputFun("aaa030", "Invalid Entry, Please try again!");
+
+                    	          }
+
+
+                        // You execute the command based on the input choice.
+                        switch(choice) {
+                             case 'f':
+                                 command_Freq();
+                                 wait = false;
+                                 break;
+                              case 'd':
+                                 command_Duty();
+                                 wait = false;
+                                 break;
+                              case 'e':
+                            	  	 exit(0);
+                                 wait = false;
+                                 break;
+                        }
+                    }
+               }
+
+}
+
+// ***These are the initialization functions for the hardware.***
+
+// This function initializes the clock.
+void initializeClock() {
+    SysCtlClockSet(SYSCTL_SYSDIV_4|SYSCTL_USE_PLL|SYSCTL_OSC_MAIN|SYSCTL_XTAL_16MHZ);
+
+}
+
+
+// This function initializes the interrupt.
+void initializeInterrupt(){
+    IntMasterEnable();
+}
+
+// This function initializes the GPIO.
+void initializeGPIO(){
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF);
+    GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE,GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3);
+}
+
+// This function initializes the UART.
+void initializeUART(){
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+
+    GPIOPinConfigure(GPIO_PA0_U0RX);
+    GPIOPinConfigure(GPIO_PA1_U0TX);
+    GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+
+    UARTClockSourceSet(UART0_BASE, UART_CLOCK_PIOSC);
+    UARTStdioConfig(0, 115200, 16000000);
+}
+
+
+// This function initializes the Timer.
+void initializeTimer(){
+
+    uint32_t period = (SysCtlClockGet() / 1000) / 1;
+
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
+    TimerConfigure(TIMER0_BASE,TIMER_CFG_PERIODIC);
+
+    TimerLoadSet(TIMER0_BASE, TIMER_A, period - 1);
+
+    IntEnable(INT_TIMER0A);
+    TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+
+    TimerEnable(TIMER0_BASE, TIMER_A);
+
+}
+
+
+// ***These are the initialization functions for the software ***
+
+
+// This function configures the pins and the generators.
+void PinGenConfig(){
+
+    // Configuring Pin PD0
+
+    uint32_t PWMClock = SysCtlClockGet() / 64;
+    uint32_t period = (PWMClock / pwm0.frequency) - 1;
+    uint32_t width = (pwm0.dutyCycle * period) / 100;
+    width = width ? width : 1;
+
+    PWMGenPeriodSet(PWM1_BASE, PWM_GEN_0, period);
+    PWMPulseWidthSet(PWM1_BASE, PWM_OUT_0, width);
+
+
+    // Configuring Pin PD1
+
+    period = (PWMClock / pwm1.frequency) - 1;
+    width = (pwm1.dutyCycle * period) / 100;
+    width = width ? width : 1;
+
+    PWMGenPeriodSet(PWM0_BASE, PWM_GEN_3, period);
+    PWMPulseWidthSet(PWM0_BASE, PWM_OUT_7, width);
+
+
+    // Configuring Pin PB4
+
+     period = (PWMClock / pwm2.frequency) - 1;
+     width = (pwm2.dutyCycle * period) / 100;
+     width = width ? width : 1;
+
+     PWMGenPeriodSet(PWM0_BASE, PWM_GEN_1, period);
+     PWMPulseWidthSet(PWM0_BASE, PWM_OUT_2, width);
+}
+
+
+// This function controls the Freq Command.
+void command_Freq(){
+    char choice;
+    bool wait = true;
+    int32_t freq = 0;
+    char arr[5] = {'0','1','4','a','e'};
+
+    OutputFun("aaa004","Choose the generator you want to set the Frequency of.");
+    OutputFun("aaa005", strcat(strcat("0 - PD0 :Currently set at ",(char*)pwm0.frequency), "Hz"));
+    OutputFun("aaa006", strcat(strcat("1 - PD1 :Currently set at ",(char*)pwm1.frequency), "Hz"));
+    OutputFun("aaa015", strcat(strcat("4 - PB4 :Currently set at ",(char*)pwm2.frequency), "%"));
+    OutputFun("aaa023", "A - All Pins (PD0, PD1 and PB4)");
+    OutputFun("aaa024", "E - Go Back to Main Menu");
+
+    bool check = true;
+    while(check){
+        choice = InputFun();
+        check = CheckChoice(arr,choice);
+
+    }
+
+    wait = true;
+
+    while(wait){
+
+
+        if(choice=='e')
+                    return;
+        OutputFun("aaa008","Enter the frequency you wish to set the pins to (in Hertz, Greater than or equal to 1 )");
+
+         freq  = atoi((const char*) InputFun());  // typecast it to int
+
+        if(freq < 1)
+             OutputFun("aaa009","Invalid Entry!");
+        else wait = false;              //Exit loop if input is valid
+    }
+
+
+
+        switch(choice) {
+                case '0':
+                        pwm0.frequency = freq;
+                        OutputFun("aaa010", strcat("PD0 frequency is now set to ",(char*)freq));
+                        break;
+                case '1':
+                        pwm1.frequency = freq;
+                        OutputFun("aaa011", strcat("PD1 frequency is now set to ",(char*)freq));
+                        break;
+                case '4':
+                        pwm2.frequency = freq;
+                        OutputFun("aaa027", strcat("PB4 frequency is now set to ",(char*)freq));
+                        break;
+                case 'a':
+                        pwm0.frequency = pwm1.frequency= pwm2.frequency = freq;
+                        OutputFun("aaa012", strcat("PD0, PD1 and PB4 frequencies are now set to ",(char*)freq));
+    }
+    PinGenConfig();
+
+}
+
+
+// This function controls the Duty Cycle.
+void command_Duty(){
+    char choice;
+    bool wait = true;
+    int32_t duty = 0;
+    char arr[5] = {'0','1','4','a','e'};
+
+
+    OutputFun("aaa013","Choose the generator you want to set the Duty Cycle of.");
+    OutputFun("aaa014", strcat(strcat("0 - PD0 :Currently set at ",(char*)pwm0.dutyCycle), "%"));
+    OutputFun("aaa015", strcat(strcat("1 - PD1 :Currently set at ",(char*)pwm1.dutyCycle), "%"));
+    OutputFun("aaa016", strcat(strcat("4 - PB4 :Currently set at ",(char*)pwm2.dutyCycle), "%"));
+    OutputFun("aaa025", "A - All Pins (PD0, PD1 and PB4)");
+    OutputFun("aaa026", "E - Go Back to Main Menu");
+
+    bool check = true;
+        while(check){
+            choice = InputFun();
+            check = CheckChoice(arr,choice);
+
+        }
+
+    while(wait){
+    	if(choice=='e')
+    	            return;
+        OutputFun("aaa017","Enter the Duty Cycle you want to set the pins to (between 0 - 100)");
+
+        duty  = atoi((const char*)InputFun());       // typecast it to int
+
+        if(duty < 0 || duty > 100)
+              OutputFun("aaa018","Invalid Entry!");
+        else wait = false;  //exit loop if input is valid
+
+    }
+
+    switch(choice) {
+            case '0':
+                    pwm0.dutyCycle = duty;
+                    OutputFun("aaa019", strcat("PD0 Duty Cycle is now set to ",(char*)duty));
+                    break;
+            case '1':
+                    pwm1.dutyCycle = duty;
+                    OutputFun("aaa020", strcat("PD1 Duty Cycle is now set to ",(char*)duty));
+                    break;
+            case '4':
+                    pwm2.dutyCycle = duty;
+                    OutputFun("aaa028", strcat("PB4 Duty Cycle is now set to ",(char*)duty));
+                    break;
+            case 'a':
+                    pwm0.dutyCycle = pwm1.dutyCycle = pwm2.dutyCycle = duty;
+                    OutputFun("aaa021", strcat("PD0, PD1 and PB4 Duty Cycles are now set to ",(char*)duty));
+    }
+    PinGenConfig();
+
+}
+
+
+void Timer0IntHandler(void) {
+
+    // Clear the timer interrupt
+    TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+}
+
+
+//OutputFun - Handles output messages with identifiers
+void OutputFun(char* ident, char* str){
+
+                UARTprintf("%s%s%s%s", ident, " ", str, "\n");
+
+}
+
+
+
+//InputFun - Gets input .
+
+char InputFun(){
+
+    return UARTgetc();
+
+}
+
+bool CheckChoice(char arr[], char c){
+int i;
+
+	for(i=0; i<sizeof(arr) + 1; i++){
+		if(arr[i]==c)
+			return false;
+	}
+	OutputFun("aaa029", "Invalid Entry, Please try again!");
+		return true;
+}
